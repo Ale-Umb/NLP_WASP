@@ -1,0 +1,16 @@
+# Install the CUDA build of PyTorch separately; see README.md.
+numpy>=2.0,<3
+pandas>=2.2,<3
+scipy>=1.13,<2
+scikit-learn>=1.5,<2
+lxml>=5,<7
+libzim>=3.5,<4
+PyYAML>=6,<7
+matplotlib>=3.9,<4
+seaborn>=0.13,<1
+tqdm>=4.66,<5
+sentence-transformers>=5.1,<6
+transformers>=4.48,<5
+datasets>=3.2,<5
+accelerate>=1.2,<2
+pytest>=8,<10

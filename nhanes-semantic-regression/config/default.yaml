@@ -1,0 +1,278 @@
+project:
+  name: nhanes_semantic_regression
+  seed: 20260809
+  data_dir: data
+  output_dir: outputs
+  device: auto                 # auto, cuda, or cpu
+  deterministic_torch: false   # true is slower; useful for strict reproducibility
+
+nhanes:
+  cycle: "2017-2018"
+  public_year_path: 2017
+  id_column: SEQN
+  base_url: "https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/{year}/DataFiles"
+  timeout_seconds: 180
+  retries: 4
+  keep_documented_columns_only: true
+  # Some public files contain multiple rows per participant (foods, prescriptions,
+  # raw test curves). They are audited but not coerced into scalar person-level data.
+  repeated_record_policy: exclude  # exclude or error
+  # Technical support and lookup files can have no participant identifier at all.
+  non_participant_table_policy: exclude  # exclude or error
+  # XPORT character fields are decoded table-wide using the first successful entry.
+  xpt_text_encodings: [utf-8, cp1252, latin-1]
+  discovery:
+    enabled: true
+    # The resolved table list is locked to outputs/data_audit/nhanes_file_manifest.csv.
+    # Leave refresh_manifest false for every analysis run after the first download.
+    refresh_manifest: false
+    data_page_url: "https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component={component}&CycleBeginYear={cycle_begin_year}"
+    components: [Demographics, Dietary, Examination, Laboratory, Questionnaire]
+    exclude_file_ids: []
+    user_agent: "NHANESSemanticRegression/4.0 (educational course project)"
+  # Used only when discovery.enabled is false (and by small offline fixtures).
+  files:
+    - {id: DEMO_J, component: Demographics and sample weights}
+    - {id: BMX_J, component: Body measures}
+    - {id: BPX_J, component: Blood pressure}
+    - {id: BIOPRO_J, component: Standard biochemistry profile}
+    - {id: CBC_J, component: Complete blood count}
+    - {id: GHB_J, component: Glycohemoglobin}
+    - {id: HDL_J, component: HDL cholesterol}
+    - {id: TCHOL_J, component: Total cholesterol}
+    - {id: TRIGLY_J, component: LDL cholesterol and triglycerides}
+    - {id: GLU_J, component: Plasma fasting glucose}
+    - {id: INS_J, component: Insulin}
+    - {id: FETIB_J, component: Iron status}
+    - {id: HSCRP_J, component: High-sensitivity C-reactive protein}
+
+preprocessing:
+  row_split_fractions:
+    factory: 0.20
+    train: 0.50
+    calibration: 0.10
+    validation: 0.10
+    test: 0.10
+  lower_winsor_quantile: 0.01
+  upper_winsor_quantile: 0.99
+  min_observed_fraction: 0.35
+  min_unique_values: 15
+  min_factory_observations: 250
+  min_scale: 1.0e-8
+  excluded_code_regex:
+    - "^SEQN$"
+    - "^WT"
+    - "^SDMV"
+    - "^SDDSRVYR$"
+  excluded_label_terms:
+    - sequence number
+    - sample weight
+    - interview weight
+    - exam weight
+    - variance pseudo
+    - data release cycle
+    - comment code
+    - imputation flag
+    - imputed value
+    - status code
+    - eligibility status
+    - education level
+    - marital status
+    - language of
+    - country of birth
+    - citizenship
+    - annual household income
+    - annual family income
+    - calculated
+    - derived variable
+
+task_factory:
+  tasks_per_target: 8
+  max_attempts_per_target: 240
+  max_total_tasks: 2400
+  feature_count_min: 4
+  feature_count_max: 12
+  signal_fraction: 0.70
+  correlation_pool_size: 28
+  min_pairwise_observations: 160
+  min_complete_rows: 140
+  min_qualification_r2: 0.04
+  min_rmse_improvement_fraction: 0.02
+  near_affine_correlation: 0.995
+  require_target_feature_domain_difference: true
+  min_feature_domains: 2
+  min_feature_tables: 2
+  ridge_alphas: [0.01, 0.1, 1.0, 10.0, 100.0]
+  target_split_fractions:
+    train: 0.65
+    validation: 0.15
+    test: 0.20
+  manual_leakage_groups:
+    body_size_derived: [BMXWT, BMXHT, BMXBMI]
+    systolic_bp_repeats: [BPXSY1, BPXSY2, BPXSY3, BPXSY4]
+    diastolic_bp_repeats: [BPXDI1, BPXDI2, BPXDI3, BPXDI4]
+    pulse_repeats: [BPXPLS, BPXPULS]
+
+wikipedia:
+  enabled: true
+  # This snapshot is an encoder-training corpus. Its text is never appended to
+  # an NHANES variable description.
+  zim_url: "https://download.kiwix.org/zim/wikipedia/wikipedia_en_medicine_mini_2026-04.zim"
+  zim_path: "wikipedia/wikipedia_en_medicine_mini_2026-04.zim"
+  zim_expected_bytes: 162855323
+  auto_download: true
+  verify_zim_checksum: true
+  download_timeout_seconds: 300
+  download_retries: 4
+  user_agent: "NHANESSemanticRegression/4.0 (educational course project)"
+
+wikipedia_adaptation:
+  enabled: true
+  name: bge_base_wikimed_contrastive_2026_04
+  base_model_id: BAAI/bge-base-en-v1.5
+  base_model_source_url: https://huggingface.co/BAAI/bge-base-en-v1.5
+  output_model_dir: models/bge_base_wikimed_contrastive_2026_04
+  objective: cached_multiple_negatives_ranking
+  max_pairs: 50000
+  validation_fraction: 0.05
+  retrieval_validation_pairs: 1000
+  min_paragraph_characters: 120
+  max_paragraph_characters: 900
+  max_seq_length: 256
+  batch_size: 64
+  mini_batch_size: 8
+  epochs: 1
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  warmup_fraction: 0.10
+  checkpoint_save_steps: 1000
+  use_amp: true
+
+embeddings:
+  batch_size: 48
+  fp16_on_cuda: true
+  models:
+    - name: general_minilm__official
+      display_name: MiniLM — official
+      kind: sentence_transformer
+      model_id: sentence-transformers/all-MiniLM-L6-v2
+      model_family: general_minilm
+      domain: general
+      text_variant: official
+      dimension: 384
+      max_seq_length: 256
+      batch_size: 96
+      source_url: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+      license: Apache-2.0
+
+    - name: general_mpnet__official
+      display_name: MPNet — official
+      kind: sentence_transformer
+      model_id: sentence-transformers/all-mpnet-base-v2
+      model_family: general_mpnet
+      domain: general
+      text_variant: official
+      dimension: 768
+      max_seq_length: 384
+      source_url: https://huggingface.co/sentence-transformers/all-mpnet-base-v2
+      license: Apache-2.0
+
+    - name: general_bge_base__official
+      display_name: BGE base — official
+      kind: sentence_transformer
+      model_id: BAAI/bge-base-en-v1.5
+      model_family: general_bge_base
+      domain: general
+      text_variant: official
+      dimension: 768
+      max_seq_length: 512
+      source_url: https://huggingface.co/BAAI/bge-base-en-v1.5
+      license: MIT
+      adaptation: none
+    - name: general_bge_base__wikimed_adapted
+      display_name: BGE base — WikiMed contrastive adaptation
+      kind: adapted_sentence_transformer
+      model_id: models/bge_base_wikimed_contrastive_2026_04
+      base_model_id: BAAI/bge-base-en-v1.5
+      model_family: general_bge_base
+      domain: wikipedia_adapted
+      text_variant: official
+      adaptation: wikimed_contrastive
+      dimension: 768
+      max_seq_length: 256
+      source_url: https://huggingface.co/BAAI/bge-base-en-v1.5
+      training_corpus_url: https://download.kiwix.org/zim/wikipedia/wikipedia_en_medicine_mini_2026-04.zim
+      license: MIT
+
+    - name: biomedical_pubmedbert__official
+      display_name: PubMedBERT — official
+      kind: sentence_transformer
+      model_id: NeuML/pubmedbert-base-embeddings
+      model_family: biomedical_pubmedbert
+      domain: biomedical
+      text_variant: official
+      dimension: 768
+      max_seq_length: 512
+      source_url: https://huggingface.co/NeuML/pubmedbert-base-embeddings
+      license: Apache-2.0
+
+    - name: biomedical_biolord__official
+      display_name: BioLORD — official
+      kind: sentence_transformer
+      model_id: FremyCompany/BioLORD-2023-C
+      model_family: biomedical_biolord
+      domain: biomedical
+      text_variant: official
+      dimension: 768
+      max_seq_length: 512
+      source_url: https://huggingface.co/FremyCompany/BioLORD-2023-C
+      license: IHTSDO-and-NLM-licenses
+
+    - name: random_control_384
+      display_name: Random control — 384d
+      kind: random
+      dimension: 384
+      model_family: random_control_384
+      domain: control
+      text_variant: control
+      source_url: generated-locally
+      license: not-applicable
+    - name: random_control_768
+      display_name: Random control — 768d
+      kind: random
+      dimension: 768
+      model_family: random_control_768
+      domain: control
+      text_variant: control
+      source_url: generated-locally
+      license: not-applicable
+
+training:
+  rank: 32
+  aggregation: sqrt            # sqrt or mean
+  epochs: 80
+  batch_size: 4096
+  max_rows_per_task: 700
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  gradient_clip_norm: 5.0
+  patience: 10
+  min_delta: 0.0001
+  amp: true
+  prefer_bfloat16: true
+  allow_tf32: true
+  compile_model: false
+  num_workers: 0              # safest default on Windows
+
+rank_selection:
+  enabled: true
+  candidates: [8, 16, 32, 64]
+  reference_embedding: general_bge_base__official
+  repeats: 3
+  seed_stride: 1009
+
+evaluation:
+  mode: zero_shot
+  min_test_rows: 40
+  bootstrap_repetitions: 2000
+  include_identity_diagnostic: false
